@@ -18,7 +18,7 @@ impl ActionTracker {
             last_trade_mbp: None,
             recent_bid_ratios: VecDeque::new(),
             recent_ask_ratios: VecDeque::new(),
-            max_values: 200,
+            max_values: 200 // Moving average window size,
             recent_buy_sizes: VecDeque::new(),
             recent_sell_sizes: VecDeque::new(),
         }
