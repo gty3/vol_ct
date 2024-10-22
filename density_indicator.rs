@@ -1,10 +1,10 @@
 use databento::dbn::Mbp10Msg;
-use serde_json::Value;
 use std::collections::VecDeque;
+use crate::ExtendedMbp10Msg;
 
 // Struct to track trading actions and maintain ratios
 pub struct ActionTracker {
-    last_trade_mbp: Option<Mbp10Msg>, // Changed field name
+    last_trade_mbp: Option<Mbp10Msg>,
     recent_bid_ratios: VecDeque<f64>,
     recent_ask_ratios: VecDeque<f64>,
     max_values: usize,
@@ -18,26 +18,42 @@ impl ActionTracker {
             last_trade_mbp: None,
             recent_bid_ratios: VecDeque::new(),
             recent_ask_ratios: VecDeque::new(),
-            max_values: 200 // Moving average window size,
+            max_values: 200,
             recent_buy_sizes: VecDeque::new(),
             recent_sell_sizes: VecDeque::new(),
         }
     }
 
-    pub fn process(&mut self, mbp: &Mbp10Msg) -> (Option<f64>, Option<f64>) {
+    pub fn process(&mut self, mbp: &Mbp10Msg) -> ExtendedMbp10Msg {
         let mut bid_trade_ratio = None;
         let mut ask_trade_ratio = None;
 
         // Skip processing if last_trade_mbp exists and current mbp is a trade
         if self.last_trade_mbp.is_some() && mbp.action == 84 {
-            // edge case where a trade is followed by another trade, will encorporate calculation later
-            return (None, None);
+            // Edge case where a trade is followed by another trade
+            return ExtendedMbp10Msg {
+                mbp10: mbp.clone(),
+                initial: false,
+                bid_density: None,
+                ask_density: None,
+                buy_density: None,
+                sell_density: None,
+            };
         }
 
         if let Some(last_trade_mbp) = &self.last_trade_mbp {
+            // Ignore synthetic trades
             if mbp.action == 77 {
-                return (None, None);
+                return ExtendedMbp10Msg {
+                    mbp10: mbp.clone(),
+                    initial: false,
+                    bid_density: None,
+                    ask_density: None,
+                    buy_density: None,
+                    sell_density: None,
+                };
             }
+
             // Calculate bid_trade_ratio
             if last_trade_mbp.side == 65 {
                 let bid_px_same = last_trade_mbp.levels[0].bid_px == mbp.levels[0].bid_px;
@@ -92,7 +108,6 @@ impl ActionTracker {
             match mbp.side {
                 66 => {
                     // 'B' for Buy
-                    println!("buy size: {}", mbp.size);
                     self.recent_buy_sizes.push_back(mbp.size);
                     if self.recent_buy_sizes.len() > self.max_values {
                         self.recent_buy_sizes.pop_front();
@@ -123,36 +138,55 @@ impl ActionTracker {
             }
         }
 
-        (bid_trade_ratio, ask_trade_ratio)
+        // Calculate average densities
+        let avg_bid_density = if !self.recent_bid_ratios.is_empty() {
+            Some(
+                self.recent_bid_ratios.iter().sum::<f64>() / self.recent_bid_ratios.len() as f64,
+            )
+        } else {
+            None
+        };
+
+        let avg_ask_density = if !self.recent_ask_ratios.is_empty() {
+            Some(
+                self.recent_ask_ratios.iter().sum::<f64>() / self.recent_ask_ratios.len() as f64,
+            )
+        } else {
+            None
+        };
+
+        let avg_buy_density = if !self.recent_buy_sizes.is_empty() {
+            Some(
+                self.recent_buy_sizes.iter().sum::<u32>() as f64 / self.recent_buy_sizes.len() as f64,
+            )
+        } else {
+            None
+        };  
+
+        let avg_sell_density = if !self.recent_sell_sizes.is_empty() {
+            Some(
+                self.recent_sell_sizes.iter().sum::<u32>() as f64 / self.recent_sell_sizes.len() as f64,
+            )
+        } else {
+            None
+        };
+        
+
+        // Construct mbp_with_ratios
+        ExtendedMbp10Msg {
+            mbp10: mbp.clone(),
+            initial: false, // Set appropriately based on your logic
+            bid_density: avg_bid_density,
+            ask_density: avg_ask_density,
+            buy_density: avg_buy_density,
+            sell_density: avg_sell_density,
+        }
     }
+}
 
-    pub fn add_to_json(&self, mbp_json: &mut Value) {
-        if !self.recent_bid_ratios.is_empty() {
-            let avg_bid_ratio = self.recent_bid_ratios.iter().sum::<f64>() / self.recent_bid_ratios.len() as f64;
-            mbp_json["bid_vol_ct"] = Value::Number(serde_json::Number::from_f64(avg_bid_ratio).unwrap());
-        }
-
-        if !self.recent_ask_ratios.is_empty() {
-            let avg_ask_ratio =
-                self.recent_ask_ratios.iter().sum::<f64>() / self.recent_ask_ratios.len() as f64;
-            mbp_json["ask_vol_ct"] =
-                Value::Number(serde_json::Number::from_f64(avg_ask_ratio).unwrap());
-        }
-
-        if !self.recent_buy_sizes.is_empty() {
-            let avg_buy_size = self.recent_buy_sizes.iter().sum::<u32>() as f64
-                / self.recent_buy_sizes.len() as f64;
-            println!("Average Buy Size: {}", avg_buy_size);
-            mbp_json["buy_vol_ct"] =
-                Value::Number(serde_json::Number::from_f64(avg_buy_size).unwrap());
-            println!("{:?}", Value::Number(serde_json::Number::from_f64(avg_buy_size).unwrap()));
-        }
-
-        if !self.recent_sell_sizes.is_empty() {
-            let avg_sell_size = self.recent_sell_sizes.iter().sum::<u32>() as f64
-                / self.recent_sell_sizes.len() as f64;
-            mbp_json["sell_vol_ct"] =
-                Value::Number(serde_json::Number::from_f64(avg_sell_size).unwrap());
-        }
+// Add this implementation
+impl Default for ActionTracker {
+    fn default() -> Self {
+        Self::new()
     }
 }
